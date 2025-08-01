@@ -52,6 +52,8 @@ Run the main workflow:
 python main.py
 ```
 
+Before use, it is necessary to create a paper folder in the root directory to store references (in PDF format)
+
 The system will:
 1. Analyze input data
 2. Generate modeling strategies
