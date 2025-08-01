@@ -15,7 +15,7 @@ paper_repository
 paper
 .env.dev
 faiss_index
-workdir
+work_8.zip
 faiss_index_count.txt
 faiss_index_metadata.json
 work_dir.txt
