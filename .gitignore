@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+framework
+excel_files
+paper_repository
+paper
+.env.dev
+faiss_index
+workdir
+faiss_index_count.txt
+faiss_index_metadata.json
+work_dir.txt
