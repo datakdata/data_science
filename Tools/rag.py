@@ -7,7 +7,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import asyncio
+import sys
 from loguru import logger
 from dotenv import load_dotenv
 
@@ -180,7 +180,7 @@ def retrieve_research_documents(question: str, k: int = 5) -> List[Dict]:
 
 async def generate_answer(agent, prompt, question: str, context_docs: List[Dict], data_path, data_report) -> Dict:
     """
-    基于检索结果生成答案 - 上层调用者职责
+    基于检索结果生成答案
     :param question: 用户问题
     :param context_docs: 检索到的文档列表
     :return: 包含答案和引用的字典
@@ -188,7 +188,7 @@ async def generate_answer(agent, prompt, question: str, context_docs: List[Dict]
     # 准备上下文
     context = ""
     references = []
-    
+
     for i, doc in enumerate(context_docs):
         ref_id = f"ref-{i+1}"
         context += f"[{ref_id}] {doc['content']}\n\n"
@@ -199,18 +199,25 @@ async def generate_answer(agent, prompt, question: str, context_docs: List[Dict]
             "page": doc['page'],
             "content_snippet": doc['content'][:100] + "...",
         })
-    
+
     # 生成答案
     formatted_prompt = prompt.format(question=question, context=context, data_path=data_path, data_report=data_report)
-    answer = await agent.run(formatted_prompt)
-    
+
+    # 使用ReAct agent处理
+    messages = [{"role": "user", "content": formatted_prompt}]
+    result = await agent.ainvoke({"messages": messages})
+
+    # 获取最终答案
+    final_message = result["messages"][-1]
+    answer = final_message.content
+
     try:
         # 尝试解析为JSON
         analysis_result = json.loads(answer)
     except json.JSONDecodeError:
-        logger.error("无法解析答案为JSON格式")
-        analysis_result = {"error": "答案格式不正确"}
-    
+        logger.error("无法解析答案为JSON格式，程序即将退出")
+        sys.exit(1)
+
     return {
         "answer": analysis_result,
         "references": references

@@ -3,7 +3,7 @@
     "fetch": {
       "command": "uvx",
       "args": ["mcp-server-fetch"],
-      "description": "用于搜索网页信息"
+      "transport": "stdio"
     },
 
     "arxiv-mcp-server": {
@@ -13,7 +13,8 @@
             "run",
             "arxiv-mcp-server",
             "--storage-path", "/path/to/paper/storage"
-        ]
+        ],
+        "transport": "stdio"
     }
   }
 }

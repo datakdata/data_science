@@ -5,10 +5,59 @@ from loguru import logger
 import json
 import asyncio
 from Tools.data_profile_analysis import DataProfileAnalysis
+from langgraph.prebuilt import create_react_agent
+from langchain_deepseek import ChatDeepSeek
+from langchain_core.tools import BaseTool
+from typing import List
+import subprocess
+import asyncio
+from langchain_mcp_adapters.client import MultiServerMCPClient
+import sys
 
 load_dotenv('.env.dev')
 API_KEY = os.getenv('API_KEY')
 MODEL = os.getenv('MODEL')
+
+class MCPToolManager:
+    """MCP工具管理器"""
+    _tools = None
+    _client = None
+    
+    @classmethod
+    async def get_tools(cls, mcp_path: str = "./mcp.json") -> List[BaseTool]:
+        """获取MCP工具（延迟加载）"""
+        if cls._tools is None:
+            await cls._initialize_tools(mcp_path)
+        return cls._tools
+    
+    @classmethod
+    async def _initialize_tools(cls, mcp_path: str):
+        """初始化MCP工具"""
+        try:
+            logger.info("正在初始化MCP工具...")
+            
+            with open(mcp_path, 'r', encoding='utf-8') as f:
+                mcp_servers = json.load(f).get('mcpServers', {})
+            
+            # 设置超时，防止卡住
+            cls._client = MultiServerMCPClient(mcp_servers)
+            
+            # 带超时的工具获取
+            cls._tools = await asyncio.wait_for(
+                cls._client.get_tools(), 
+                timeout=30.0  # 30秒超时
+            )
+            logger.info(f"成功加载 {len(cls._tools)} 个MCP工具: {[tool.name for tool in cls._tools]}")
+                
+        except Exception as e:
+            logger.error(f"MCP工具初始化失败: {e}")
+            sys.exit(1)
+    
+    @classmethod
+    async def close(cls):
+        """关闭MCP客户端"""
+        if cls._client:
+            await cls._client.aclose()
 
 with open('./Tools/generate_work_dir.py', 'r', encoding='utf-8') as f:
     code = f.read()
@@ -28,7 +77,7 @@ async def workflow(user_input, data_path, work_dir):
     
     prompt_template = """
     你是一个专业的数学建模助手，请基于以下上下文为用户提交的数学建模题目进行提供建模详细思路。注意一定要详细，并且你无需进行任何操作，只需要根据收到的信息给出建模策略。
-    你需要根据用户给出的题目，使用arxiv-mcp-server工具参考4-6篇论文，并列出参考文献的网页链接
+    你需要根据用户给出的题目，使用arxiv工具参考4-6篇论文，并列出参考文献的网页链接，注意一定要给出链接
     如果无法从上下文中得到答案，请通过配置的fetch工具搜索一些专业的网页知识进行回答，并注意一定要标注参考网址的链接。若未参考网页内容则无需标注。
     过滤掉与问题极度相同的文献，防止查重率过高。
     回答格式为json。分别包含问题背景，问题分析和详细解题步骤，注意问题背景不是用户需要输入的内容，而是你需要从用户提供的问题中提炼的。
@@ -43,32 +92,48 @@ async def workflow(user_input, data_path, work_dir):
     上下文:
     {context}
 
-    示例输出：
+    示例输出（注意你的输出内容中只能包含这个单独的json文件，不能包含其他任何内容）：
     {{
     "问题背景": "xxx，读取/未读取到数据",
-    "问题一分析": "xxx，参考链接：",
+    "问题一分析": "xxx，参考链接：（若没有则指明未找到对应文献）",
     "问题二分析": "xxx，参考链接：",
+    "从搜索到的文献中得到的启发":"xxx"
     ……
     "详细解题步骤": {{
-        "1、观察数据": "详细了解各个工作表的结构，内容，列名，索引等，可以按照需要了解数据正态性，缺失值，异常值等。注意一定要详细，特别是列名，索引，本步骤必须编写程序并调用代码执行工具求解完成",
-        "2. 数据预处理：": "数据eda分析、可视化等，请在上一步观察结果的基础上进行可视化和eda分析，要保证可视化图片可以准确显示中文、负号等特殊字符",
-        "3. 问题1求解:": "……",
-        "4. 问题2求解:": "……",
-        "5. 问题3求解:": "……",
+        "1. 数据预处理：": "数据eda分析、可视化、正态性检验等与求解后续题目相关的基础分析，注意无关的分析最好不要做",
+        "2. 问题1求解:": "……",
+        "3. 问题2求解:": "……",
+        "4. 问题3求解:": "……",
         ……
-        "6. 敏感性分析：": "……"
+        "5. 敏感性分析：": "……"
         }}
     }}
     """
     
-    agent, prompt = generate_base_agent(prompt_template, MODEL, API_KEY, input_variables=["question", "context", "data_path", "data_report"])
-    modeler = await run_modeler(agent, prompt, user_input, data_report, data_path)
+    # 直接创建LLM
+    llm = ChatDeepSeek(
+        model=MODEL,
+        api_key=API_KEY,
+        temperature=0.3,
+    )
+    
+    mcp_tools = await MCPToolManager.get_tools()
+
+    # 创建ReAct agent
+    react_agent = create_react_agent(
+        llm,
+        tools=mcp_tools,
+        prompt="你是一个专业的数学建模助手，请基于检索到的学术文献为用户问题提供详细的建模思路和解决方案。对于你使用工具查找的网络文献，要自己仔细阅读，如果适合则给出参考链接"
+    )
+
+    prompt = prompt_template
+
+    modeler = await run_modeler(react_agent, prompt, user_input, data_report, data_path)
     
     analysis_result = modeler['answer']
     
     with open(os.path.join(work_dir, 'analysis_result.json'), 'w', encoding='utf-8') as f:
         json.dump(analysis_result, f, ensure_ascii=False, indent=4)
-    logger.info(f'analysis_result: {analysis_result}')
     
     await coderagent.execute_task(
         problem_text=user_input,

@@ -48,43 +48,44 @@ class NotebookCodeExecutor:
         """
         执行代码并保存结果到Jupyter笔记本
         :param code: 要执行的Python代码
-        :param notebook_name: 笔记本文件名（忽略参数，使用固定文件名)
+        :param notebook_name: 笔记本文件名
         :return: 包含执行结果和保存路径的字典
         """
-        # 创建新的Notebook
-        nb = nbformat.v4.new_notebook()
-        nb.metadata.kernelspec = {
-            "name": self.kernel_name,
-            "display_name": f"Python 3 ({self.kernel_name})",
-            "language": "python"
-        }
-        
-        # 添加代码单元格
-        code_cell = nbformat.v4.new_code_cell(source=code)
-        nb.cells.append(code_cell)
-        
+
         code_path = Path(self.output_dir) / 'executed_code'
         os.makedirs(code_path, exist_ok=True)
         save_path = Path(code_path) / notebook_name
-        
-        # 如果文件已存在，读取并追加新单元格
-        if save_path.exists():
-            existing_nb = nbformat.read(save_path, as_version=4)
-            existing_nb.cells.append(code_cell)
-            nb = existing_nb
-        
-        # 安全检查
-        # if not self._is_code_safe(code):
-        #     # 即使不执行也保存笔记本（不含输出）
-        #     nbformat.write(nb, save_path)
-        #     return {
-        #         'status': 'security_error',
-        #         'output': '代码包含潜在危险命令，拒绝执行',
-        #         'notebook_path': str(save_path),
-        #         'execution_count': 0
-        #     }
 
-        # 配置执行参数
+        # 如果文件已存在，读取现有笔记本
+        if save_path.exists():
+            try:
+                nb = nbformat.read(save_path, as_version=4)
+                # 记录现有单元格数量，用于后续只执行新单元格
+                existing_cell_count = len(nb.cells)
+            except:
+                # 如果读取失败，创建新笔记本
+                nb = nbformat.v4.new_notebook()
+                nb.metadata.kernelspec = {
+                    "name": self.kernel_name,
+                    "display_name": f"Python 3 ({self.kernel_name})",
+                    "language": "python"
+                }
+                existing_cell_count = 0
+        else:
+            # 创建新笔记本
+            nb = nbformat.v4.new_notebook()
+            nb.metadata.kernelspec = {
+                "name": self.kernel_name,
+                "display_name": f"Python 3 ({self.kernel_name})",
+                "language": "python"
+            }
+            existing_cell_count = 0
+
+        # 添加代码单元格
+        code_cell = nbformat.v4.new_code_cell(source=code)
+        nb.cells.append(code_cell)
+
+        # 配置执行参数，只执行新添加的单元格
         client = NotebookClient(
             nb,
             timeout=self.timeout,
@@ -94,31 +95,51 @@ class NotebookCodeExecutor:
 
         # 执行代码并处理结果
         try:
-            last_cell_index = len(nb.cells) - 1
-            
+            # 只执行新添加的单元格（从existing_cell_count开始）
             client.execute()
-            
+
             # 收集最后一个单元格的输出
+            last_cell_index = len(nb.cells) - 1
             output = self._collect_outputs(nb.cells[last_cell_index])
-            
+
             # 保存执行后的笔记本
             nbformat.write(nb, save_path)
-            
+
             return {
                 'status': 'success',
                 'output': output,
                 'notebook_path': str(save_path),
-                'execution_count': nb.cells[0].execution_count
+                'execution_count': nb.cells[last_cell_index].get('execution_count', 0)
             }
         except CellExecutionError as e:
-            # 保存包含错误信息的笔记本
-            nbformat.write(nb, save_path)
+            # 如果执行错误，删除最后一个单元格（即当前执行的单元格）
+            if nb.cells:
+                nb.cells.pop()
+            
+            # 保存删除错误单元格后的笔记本
+            if nb.cells:  # 如果还有单元格，保存笔记本
+                nbformat.write(nb, save_path)
+            else:  # 如果没有单元格了，删除笔记本文件
+                if save_path.exists():
+                    save_path.unlink()
+            
             return {
                 'status': 'execution_error',
                 'output': str(e),
-                'execution_count': nb.cells[0].get('execution_count', 0)
+                'execution_count': 0
             }
         except Exception as e:
+            # 如果系统错误，也删除单元格
+            if nb.cells:
+                nb.cells.pop()
+            
+            # 保存删除错误单元格后的笔记本
+            if nb.cells:  # 如果还有单元格，保存笔记本
+                nbformat.write(nb, save_path)
+            else:  # 如果没有单元格了，删除笔记本文件
+                if save_path.exists():
+                    save_path.unlink()
+            
             return {
                 'status': 'system_error',
                 'output': f"执行失败: {str(e)}",
@@ -183,7 +204,7 @@ print("斐波那契数列前10项:")
 for i in range(10):
     print(fibonacci(i), end=' ')
     """
-    result = executor.execute_and_save(math_code, "fibonacci_calculation")
+    result = executor.execute_and_save(math_code, "fibonacci_calculation1.ipynb")
     print(f"执行状态: {result['status']}")
     print(f"输出:\n{result['output']}")
     # print(f"保存路径: {result['notebook_path']}\n")

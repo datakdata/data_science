@@ -16,19 +16,10 @@ async def run_modeler(agent, prompt, user_input: str, data_report, data_path: st
     logger.info(f"检索到 {len(retrieved_docs)} 个相关文档片段")
     
     # 步骤2: 基于检索结果生成答案
-    logger.info("生成答案中...")
+    logger.info("建模手建模中...")
     result = await generate_answer(agent, prompt, user_input, retrieved_docs, data_path, data_report)
     
-    # 步骤3: 展示结果
-    # print("\n" + "="*25 + " 回答结果 " + "="*25)
-    # print(result["answer"])
-    
-    # if result.get('references'):
-    #     print("\n引用文献:")
-    #     for ref in result['references']:
-    #         print(f"- [{ref['id']}] {ref['paper']} (第{ref['page']}页)")
-    #         print(f"  片段: {ref['content_snippet']}")
-            
+    logger.success("\n建模手建模完成，开始求解题目")
     return result
 
 if __name__ == "__main__":
